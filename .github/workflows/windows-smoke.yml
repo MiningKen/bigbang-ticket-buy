@@ -1,0 +1,47 @@
+name: Windows portable smoke test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.1
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run package:windows
+      - name: Verify portable runtime and imports
+        shell: pwsh
+        run: |
+          $package = "dist/ticketplus-assistant-windows-x64"
+          & "$package/runtime/node.exe" --version
+          Push-Location $package
+          & ".\runtime\node.exe" -e "import('playwright-core').then(() => import('./src/config.js')).then(({ findBrowserExecutable }) => { const browser = findBrowserExecutable(); if (!browser) throw new Error('Chrome or Edge not found'); console.log(browser); })"
+          Pop-Location
+      - name: Verify local control panel
+        shell: pwsh
+        run: |
+          $package = Resolve-Path "dist/ticketplus-assistant-windows-x64"
+          $env:DASHBOARD_HEADLESS = "true"
+          $process = Start-Process -FilePath "$package/runtime/node.exe" -ArgumentList "src/control-server.js" -WorkingDirectory $package -PassThru
+          try {
+            Start-Sleep -Seconds 4
+            $state = Invoke-RestMethod "http://127.0.0.1:4173/api/state"
+            if ($state.phase -ne "idle") { throw "Unexpected phase: $($state.phase)" }
+          } finally {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ticketplus-assistant-windows-x64
+          path: |
+            dist/ticketplus-assistant-windows-x64.zip
+            dist/ticketplus-assistant-windows-x64.zip.sha256

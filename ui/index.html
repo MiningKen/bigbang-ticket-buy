@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Ticket Plus 搶票助手</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <p class="eyebrow">BIGBANG TAIPEI</p>
+          <h1>搶票控制台</h1>
+        </div>
+        <span id="runningBadge" class="badge neutral">未啟動</span>
+      </header>
+
+      <section class="status-grid" aria-label="即時狀態">
+        <article>
+          <span>會員</span>
+          <strong id="loginStatus">檢查中</strong>
+        </article>
+        <article>
+          <span>票況</span>
+          <strong id="ticketStatus">尚未讀取</strong>
+        </article>
+        <article class="wide">
+          <span>目前動作</span>
+          <strong id="phaseStatus">尚未啟動</strong>
+          <small id="updatedAt"></small>
+        </article>
+      </section>
+
+      <form id="configForm">
+        <div class="field">
+          <label for="targetDate">場次</label>
+          <select id="targetDate" name="targetDate">
+            <option value="2026-10-09">10/09（五）18:00</option>
+            <option value="2026-10-10">10/10（六）18:00</option>
+            <option value="2026-10-11">10/11（日）18:00</option>
+          </select>
+        </div>
+
+        <div class="field-row">
+          <div class="field">
+            <label for="ticketCount">票數</label>
+            <select id="ticketCount" name="ticketCount">
+              <option value="1">1 張</option>
+              <option value="2">2 張</option>
+              <option value="3">3 張</option>
+              <option value="4">4 張</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="seatingMode">連號策略</label>
+            <select id="seatingMode" name="seatingMode">
+              <option value="adjacent-only">一定連號</option>
+              <option value="adjacent-preferred">連號優先</option>
+              <option value="any">可不連號</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="pollMode">監看速度</label>
+          <select id="pollMode" name="pollMode">
+            <option value="fast">快速（5–8 秒，熱門票建議）</option>
+            <option value="balanced">標準（10–15 秒）</option>
+            <option value="conservative">保守（15–25 秒）</option>
+          </select>
+          <small>只讀取輕量票況 API；若網站回應 403/429，程式會自動停止。</small>
+        </div>
+
+        <div class="field">
+          <label for="preferredPrices">票價優先順序</label>
+          <input id="preferredPrices" name="preferredPrices" placeholder="9430,9380,8880,8380" />
+          <small>由左至右嘗試，不要輸入千分位逗號。</small>
+        </div>
+
+        <label class="check-row">
+          <input id="autoAdvance" name="autoAdvance" type="checkbox" />
+          <span>我已閱讀並接受條款；選到票後自動按下一步</span>
+        </label>
+
+        <button type="submit" class="secondary">儲存設定</button>
+      </form>
+
+      <div class="actions">
+        <button id="openLogin" class="secondary">開啟登入頁</button>
+        <button id="start" class="primary">開始監看</button>
+        <button id="stop" class="danger">停止</button>
+      </div>
+
+      <section class="log-panel">
+        <div class="log-title">操作紀錄</div>
+        <ol id="logs"><li>等待啟動</li></ol>
+      </section>
+      <p id="toast" role="status"></p>
+    </main>
+
+    <div id="alertOverlay" class="overlay" hidden>
+      <section class="alert-card" role="alertdialog" aria-modal="true" aria-labelledby="alertTitle">
+        <div class="pulse"></div>
+        <p class="eyebrow">需要立即處理</p>
+        <h2 id="alertTitle">發現票券／需要接手</h2>
+        <p id="alertMessage"></p>
+        <button id="focusTicket" class="primary">切換到購票視窗</button>
+        <button id="dismissAlert" class="secondary">關閉提示</button>
+      </section>
+    </div>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

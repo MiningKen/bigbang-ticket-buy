@@ -1,0 +1,19 @@
+{
+  "name": "ticketplus-browser-assistant",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Conservative browser assistant for watching a Ticket Plus session and entering the purchase flow.",
+  "scripts": {
+    "app": "node src/control-server.js",
+    "package:windows": "node scripts/build-windows-package.mjs",
+    "configure": "node src/choose-session.js",
+    "choose": "node src/choose-session.js",
+    "login": "node src/index.js login",
+    "watch": "node src/index.js watch",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "playwright-core": "^1.55.0"
+  }
+}

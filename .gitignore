@@ -1,0 +1,6 @@
+node_modules/
+.ticketplus-profile/
+.ticketplus-panel-profile/
+artifacts/
+.env
+dist/
