@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { chromium } from 'playwright-core';
 
 import { TicketController } from './controller.js';
+import { attachDashboardShutdown } from './dashboard-lifecycle.js';
 
 const host = '127.0.0.1';
 const port = Number.parseInt(process.env.CONTROL_PORT || '4173', 10);
@@ -11,6 +12,8 @@ const dashboardHeadless = /^(?:1|true|yes)$/i.test(process.env.DASHBOARD_HEADLES
 const root = process.cwd();
 const uiRoot = join(root, 'ui');
 const controller = new TicketController(root);
+let dashboardBrowser = null;
+let dashboardPage = null;
 
 const contentTypes = {
   '.html': 'text/html; charset=utf-8',
@@ -80,20 +83,29 @@ const server = createServer(async (request, response) => {
   }
 });
 
+server.on('error', (error) => {
+  if (error.code === 'EADDRINUSE') {
+    console.error(`無法啟動：${host}:${port} 已被另一個控制面板使用。請先關閉原本的控制面板，或在終端機按 Ctrl+C。`);
+  } else {
+    console.error(`控制面板無法啟動：${error.message}`);
+  }
+  process.exitCode = 1;
+});
+
 server.listen(port, host, async () => {
   const url = `http://${host}:${port}`;
   console.log(`Ticket Plus 控制面板：${url}`);
   try {
     const config = controller.getConfig();
-    const dashboardBrowser = await chromium.launch({
+    dashboardBrowser = await chromium.launch({
       executablePath: config.chromePath,
       headless: dashboardHeadless,
       args: ['--window-size=620,820'],
     });
     const context = await dashboardBrowser.newContext({ viewport: { width: 580, height: 740 } });
-    const page = await context.newPage();
-    await page.goto(url);
-    dashboardBrowser.on('disconnected', () => shutdown());
+    dashboardPage = await context.newPage();
+    await dashboardPage.goto(url);
+    attachDashboardShutdown({ dashboardBrowser, dashboardPage, shutdown });
   } catch (error) {
     console.error(`無法自動開啟控制面板：${error.message}`);
     console.log(`請手動開啟 ${url}`);
@@ -105,6 +117,9 @@ async function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
   await controller.close();
+  await dashboardBrowser?.close().catch(() => {});
+  dashboardBrowser = null;
+  dashboardPage = null;
   server.close(() => process.exit(0));
 }
 
