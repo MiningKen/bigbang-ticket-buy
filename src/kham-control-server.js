@@ -64,6 +64,11 @@ const server = createServer(async (request, response) => {
       sendJson(response, 200, controller.setCardPrefix(cardPrefix));
       return;
     }
+    if (request.method === 'POST' && request.url === '/api/preferences') {
+      const { ticketMode } = await readJson(request);
+      sendJson(response, 200, controller.setTicketMode(ticketMode));
+      return;
+    }
     if (request.method === 'POST' && request.url === '/api/start') {
       void controller.start();
       sendJson(response, 202, controller.publicState());

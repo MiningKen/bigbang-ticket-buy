@@ -3,6 +3,18 @@ import assert from 'node:assert/strict';
 
 import { KhamController } from '../src/kham-controller.js';
 
+test('Kham runtime ticket mode accepts only the two supported choices', () => {
+  const controller = new KhamController('/tmp/kham-controller-test');
+
+  assert.equal(
+    controller.setTicketMode('adjacent-two-then-one').config.ticketMode,
+    'adjacent-two-then-one',
+  );
+  assert.throws(() => controller.setTicketMode('two-separated'), /票數模式/);
+  controller.state.running = true;
+  assert.throws(() => controller.setTicketMode('single'), /執行中/);
+});
+
 class FlowController extends KhamController {
   constructor(results, ticketMode = 'single') {
     super('/tmp/kham-controller-test');

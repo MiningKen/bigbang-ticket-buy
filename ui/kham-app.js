@@ -7,6 +7,8 @@ const elements = {
   settings: document.querySelector('#settings'),
   logs: document.querySelector('#logs'),
   toast: document.querySelector('#toast'),
+  preferenceForm: document.querySelector('#preferenceForm'),
+  ticketMode: document.querySelector('#ticketMode'),
   cardPrefixForm: document.querySelector('#cardPrefixForm'),
   cardPrefix: document.querySelector('#cardPrefix'),
   cardPrefixStatus: document.querySelector('#cardPrefixStatus'),
@@ -36,11 +38,14 @@ function phaseLabel(phase) {
   return {
     idle: '尚未啟動',
     starting: '正在啟動',
-    'waiting-sale': '等待 14:00 開賣',
+    'waiting-sale': '等待 9/22 10:00 開賣',
     'entering-sale': '進入官方購票流程',
     'waiting-card': '正在自動送出卡友驗證',
+    'refresh-wait': '等待下一次更新票數',
+    refreshing: '正在更新票數',
     selecting: '正在選擇票種',
     'manual-action': '等待你接手',
+    blocked: '已暫停，等待你檢查',
     error: '發生錯誤',
   }[phase] || phase;
 }
@@ -87,17 +92,32 @@ function render(state) {
   elements.salePlan.textContent = `開賣：${new Date(state.config.saleStart).toLocaleString('zh-TW', { hour12: false })}`;
   elements.start.disabled = state.running;
   elements.stop.disabled = !state.running;
+  elements.ticketMode.value = state.config.ticketMode;
+  elements.ticketMode.disabled = state.running;
+  elements.cardPrefixForm.hidden = state.config.saleMode === 'general-sale';
+  elements.start.textContent = state.config.saleMode === 'general-sale'
+    ? '開始等待 9/22 10:00'
+    : '開始中信卡友演練';
   elements.cardPrefixStatus.textContent = state.cardPrefixReady
     ? '已暫存在記憶體；關閉程式後會自動清除。'
     : '尚未暫存；不會寫入設定檔或操作紀錄。';
 
+  const ticketPriority = state.config.ticketMode === 'adjacent-two-then-one'
+    ? '票數順位：2/28 兩張連號 → 2/27 兩張連號 → 2/28 單張 → 2/27 單張'
+    : '票數順位：2/28 單張 → 2/27 單張';
   const settings = [
-    `首選：${state.config.primary}（1 張）`,
+    `首選：${state.config.primary}`,
     `備案：${state.config.fallback}`,
+    ticketPriority,
     '不選輪椅／身障席；非遮蔽區優先，再依票價高至低',
+    '無票時每 3–5 秒使用官方「更新票數」，持續到選到票或你按停止',
     `VIP 粉絲福利：${state.config.wantVipBenefit ? '要' : '不要'}；自動下一步：${state.config.autoAdvance ? '開啟' : '關閉'}`,
-    `卡號前 6 碼及卡友驗證自動送出：${state.cardPrefixReady ? '已準備' : '尚未設定'}；完整卡號與付款由你處理。`,
   ];
+  if (state.config.saleMode === 'ctbc-rehearsal') {
+    settings.push(`卡號前 6 碼：${state.cardPrefixReady ? '已準備' : '尚未設定'}；演練抵達票況頁即停止。`);
+  } else {
+    settings.push('一般販售不需卡號前 6 碼；選票後仍須由你完成實名資料與付款。');
+  }
   elements.settings.innerHTML = settings.map((item) => `<li><span>${escapeHtml(item)}</span></li>`).join('');
   elements.logs.innerHTML = state.logs.length
     ? state.logs.map((entry) => {
@@ -136,6 +156,18 @@ async function runAction(path) {
 }
 
 elements.openLogin.addEventListener('click', () => runAction('/api/open-login'));
+elements.ticketMode.addEventListener('change', async () => {
+  elements.toast.textContent = '';
+  try {
+    render(await request('/api/preferences', {
+      method: 'POST',
+      body: JSON.stringify({ ticketMode: elements.ticketMode.value }),
+    }));
+  } catch (error) {
+    elements.toast.textContent = error.message;
+    await refresh();
+  }
+});
 elements.cardPrefixForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   elements.toast.textContent = '';

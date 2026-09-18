@@ -10,7 +10,7 @@
     <main>
       <header>
         <div>
-          <p class="eyebrow">BIGBANG KAOHSIUNG · CTBC PRESALE</p>
+          <p class="eyebrow">BIGBANG KAOHSIUNG · GENERAL SALE</p>
           <h1>寬宏搶票控制台</h1>
         </div>
         <span id="runningBadge" class="badge neutral">未啟動</span>
@@ -39,6 +39,17 @@
         </ol>
       </section>
 
+      <form id="preferenceForm">
+        <div class="field">
+          <label for="ticketMode">票數模式</label>
+          <select id="ticketMode" name="ticketMode">
+            <option value="single">1 張</option>
+            <option value="adjacent-two-then-one">2 張連號優先，失敗則 1 張</option>
+          </select>
+          <small>兩張只接受連號；2/28、2/27 都無連號後才會改搶單張。</small>
+        </div>
+      </form>
+
       <form id="cardPrefixForm" autocomplete="off">
         <div class="field">
           <label for="cardPrefix">中信卡號前 6 碼</label>
@@ -59,7 +70,7 @@
 
       <div class="actions">
         <button id="openLogin" class="secondary">開啟登入頁</button>
-        <button id="start" class="primary">開始等待 14:00</button>
+        <button id="start" class="primary">開始等待 9/22 10:00</button>
         <button id="stop" class="danger">停止</button>
       </div>
 

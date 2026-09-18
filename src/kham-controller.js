@@ -25,7 +25,7 @@ import {
   waitForKhamInventory,
 } from './kham-actions.js';
 import { readKhamConfig } from './kham-config.js';
-import { buildKhamAttemptPlan, nextKhamRefreshDelay } from './kham-strategy.js';
+import { buildKhamAttemptPlan, KHAM_TICKET_MODES, nextKhamRefreshDelay } from './kham-strategy.js';
 
 const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 const ACTION_DISCOVERY_TIMEOUT_MS = 15_000;
@@ -38,6 +38,7 @@ export class KhamController {
     this.context = null;
     this.page = null;
     this.cardPrefix = null;
+    this.ticketModeOverride = null;
     this.stopRequested = false;
     this.restriction = null;
     this.configuredPages = new WeakSet();
@@ -56,7 +57,13 @@ export class KhamController {
 
   getConfig() {
     const fileEnv = existsSync(this.envPath) ? parseEnv(readFileSync(this.envPath, 'utf8')) : {};
-    return readKhamConfig({ ...process.env, ...fileEnv }, this.cwd);
+    const config = readKhamConfig({ ...process.env, ...fileEnv }, this.cwd);
+    if (!this.ticketModeOverride) return config;
+    return {
+      ...config,
+      ticketMode: this.ticketModeOverride,
+      ticketCount: this.ticketModeOverride === 'adjacent-two-then-one' ? 2 : 1,
+    };
   }
 
   publicState() {
@@ -68,6 +75,8 @@ export class KhamController {
         primary: config.primary.label,
         fallback: config.fallback.label,
         saleStart: config.saleStart.toISOString(),
+        saleMode: config.saleMode,
+        ticketMode: config.ticketMode,
         ticketCount: config.ticketCount,
         wantVipBenefit: config.wantVipBenefit,
         autoAdvance: config.autoAdvance,
@@ -78,6 +87,16 @@ export class KhamController {
   setCardPrefix(value) {
     this.cardPrefix = normalizeKhamCardPrefix(value);
     this.log('已在記憶體暫存中信卡號前 6 碼；關閉程式後會自動清除');
+    return this.publicState();
+  }
+
+  setTicketMode(value) {
+    if (this.state.running) throw new Error('搶票執行中不能變更票數模式；請先停止');
+    if (!KHAM_TICKET_MODES.has(value)) throw new Error('票數模式只能選擇單張或兩張連號優先');
+    this.ticketModeOverride = value;
+    this.log(value === 'single'
+      ? '票數模式已設為 1 張'
+      : '票數模式已設為 2 張連號優先；兩個日期都無連號時降為 1 張');
     return this.publicState();
   }
 
