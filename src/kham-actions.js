@@ -6,6 +6,39 @@ const CHALLENGE_PATTERN = /驗證碼|captcha|我不是機器人|正在排隊|排
 const CARD_VALIDATION_PATTERN = /(?:信用)?卡號前\s*(?:6|六)\s*碼|信用卡前\s*(?:6|六)\s*碼|輸入.*卡號/i;
 const PURCHASE_LABEL_PATTERN = /^立即訂購$/;
 const REAL_NAME_NOTICE_PATTERN = /本節目採[「\s]*個人實名制入場/;
+const ADJACENT_UNAVAILABLE_PATTERN = /(?:無法|不能|未能|沒有).{0,12}(?:連號|相鄰)|(?:連號|相鄰).{0,12}(?:無法|不足|沒有)/i;
+
+function parseKhamSeatLabels(value) {
+  const text = Array.isArray(value) ? value.join('、') : String(value || '');
+  return [...text.matchAll(/([^\s,，、。；;]{1,24}區)\s*(\d+)\s*排\s*(\d+)\s*號/g)].map((match) => ({
+    area: match[1].replace(/\s+/g, ''),
+    row: Number.parseInt(match[2], 10),
+    seat: Number.parseInt(match[3], 10),
+  }));
+}
+
+export function areKhamSeatsAdjacent(labels) {
+  const seats = parseKhamSeatLabels(labels);
+  if (seats.length !== 2) return false;
+  const [left, right] = seats;
+  return left.area === right.area
+    && left.row === right.row
+    && Math.abs(left.seat - right.seat) === 1;
+}
+
+export function classifyKhamAllocation(text, requestedCount) {
+  const normalized = String(text || '');
+  if (requestedCount === 1) {
+    return parseKhamSeatLabels(normalized).length >= 1 ? 'single-confirmed' : 'unknown';
+  }
+  if (requestedCount !== 2) return 'unknown';
+  if (ADJACENT_UNAVAILABLE_PATTERN.test(normalized)) return 'adjacent-unavailable';
+  const seats = parseKhamSeatLabels(normalized);
+  if (seats.length < 2) return 'unknown';
+  return areKhamSeatsAdjacent(seats.map((seat) => `${seat.area} ${seat.row}排 ${seat.seat}號`))
+    ? 'confirmed'
+    : 'adjacent-unavailable';
+}
 
 export function priceFromKhamText(text) {
   const explicit = String(text || '').match(/(?:NT\.?\s*)?[$＄]\s*([\d,]+)/i)
@@ -152,6 +185,37 @@ export async function selectBestKhamArea(page, snapshot, config = {}) {
   if (await control.count()) await control.click();
   else await row.click();
   return { selected: true, area };
+}
+
+export async function selectKhamQuantity(page, ticketCount) {
+  if (![1, 2].includes(ticketCount)) throw new Error('寬宏票數只能選擇 1 或 2 張');
+  const target = await page.evaluate((count) => {
+    const visible = (element) => {
+      const style = window.getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return style.display !== 'none'
+        && style.visibility !== 'hidden'
+        && rect.width > 0
+        && rect.height > 0;
+    };
+    const selects = [...document.querySelectorAll('select')];
+    for (let index = 0; index < selects.length; index += 1) {
+      const select = selects[index];
+      if (!visible(select) || select.disabled) continue;
+      const option = [...select.options].find((candidate) => {
+        if (candidate.disabled) return false;
+        const value = String(candidate.value || '').trim();
+        const label = String(candidate.textContent || '').trim();
+        return value === String(count) || new RegExp(`^${count}(?:\\s*張)?$`).test(label);
+      });
+      if (option) return { kind: 'select', index, value: option.value };
+    }
+    return null;
+  }, ticketCount);
+
+  if (!target) return false;
+  await page.locator('select').nth(target.index).selectOption(target.value);
+  return true;
 }
 
 export async function pageText(page) {

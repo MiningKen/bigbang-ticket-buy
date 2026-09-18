@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  areKhamSeatsAdjacent,
+  classifyKhamAllocation,
   classifyKhamPage,
   classifyKhamInventory,
   clickBestKhamPurchaseOption,
@@ -11,6 +13,7 @@ import {
   priceFromKhamText,
   rankKhamAreas,
   rankKhamOffers,
+  selectKhamQuantity,
   submitKhamCardValidation,
 } from '../src/kham-actions.js';
 import * as khamActions from '../src/kham-actions.js';
@@ -167,6 +170,34 @@ test('inventory ranking excludes accessible areas and prefers non-obstructed inv
   ]);
 
   assert.deepEqual(ranked.map((row) => row.index), [2, 1]);
+});
+
+test('Kham adjacency requires the same area and row with consecutive seat numbers', () => {
+  assert.equal(areKhamSeatsAdjacent(['A區 3排 8號', 'A區 3排 9號']), true);
+  assert.equal(areKhamSeatsAdjacent(['A區 3排 8號', 'A區 3排 10號']), false);
+  assert.equal(areKhamSeatsAdjacent(['A區 3排 8號', 'B區 3排 9號']), false);
+  assert.equal(areKhamSeatsAdjacent(['A區 3排 8號']), false);
+});
+
+test('Kham allocation rejects an explicitly non-adjacent pair and recognizes confirmed seats', () => {
+  assert.equal(classifyKhamAllocation('無法配置兩張連號座位', 2), 'adjacent-unavailable');
+  assert.equal(classifyKhamAllocation('A區 3排 8號、A區 3排 9號', 2), 'confirmed');
+  assert.equal(classifyKhamAllocation('A區 3排 8號、A區 3排 10號', 2), 'adjacent-unavailable');
+  assert.equal(classifyKhamAllocation('A區 3排 8號', 1), 'single-confirmed');
+  assert.equal(classifyKhamAllocation('請選擇座位', 2), 'unknown');
+});
+
+test('Kham quantity selection chooses the exact requested count', async () => {
+  const selections = [];
+  const page = {
+    evaluate: async () => ({ kind: 'select', index: 1, value: '2' }),
+    locator: () => ({
+      nth: (index) => ({ selectOption: async (value) => selections.push({ index, value }) }),
+    }),
+  };
+
+  assert.equal(await selectKhamQuantity(page, 2), true);
+  assert.deepEqual(selections, [{ index: 1, value: '2' }]);
 });
 
 test('Kham card prefix accepts exactly six digits', () => {
