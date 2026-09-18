@@ -9,6 +9,7 @@ const PURCHASE_LABEL_PATTERN = /^立即訂購$/;
 const REAL_NAME_NOTICE_PATTERN = /本節目採[「\s]*個人實名制入場/;
 const ADJACENT_UNAVAILABLE_PATTERN = /(?:無法|不能|未能|未配置|沒有|不足|無|非).{0,12}(?:連號|相鄰|連續座位)|(?:連號|相鄰|連續座位).{0,12}(?:無法|不足|沒有|未配置)/i;
 const HANDOFF_PATTERN = /購物車|結帳|訂購資料|訂購確認|實名資料|持票人|付款方式|訂單/i;
+const BLOCKING_RESULT_PATTERN = /錯誤|失敗|無法|逾時|請重新|已售完|銷售一空|登入/i;
 
 function parseKhamSeatLabels(value) {
   const text = Array.isArray(value) ? value.join('、') : String(value || '');
@@ -45,6 +46,7 @@ export function classifyKhamAllocation(text, requestedCount) {
 
 export function classifyKhamHandoff(evidence, requestedCount) {
   if ((evidence.dialogs || []).length) return 'blocked';
+  if (BLOCKING_RESULT_PATTERN.test(evidence.blockingText || '')) return 'blocked';
   const activeStage = `${evidence.activeStep || ''} ${(evidence.headings || []).join(' ')}`;
   if (!HANDOFF_PATTERN.test(activeStage)) return 'unknown';
   if (requestedCount === 1) return 'confirmed';
@@ -343,7 +345,11 @@ export async function inspectKhamHandoff(page) {
     const seatContainers = [...document.querySelectorAll('.cart, .shopping-cart, .order, .checkout, .seat-info, .ticket-info, [class*="cart"], [id*="cart"]')]
       .filter(visible);
     const seatText = clean(seatContainers.map((element) => element.innerText || element.textContent).join(' '));
-    return { dialogs, activeStep, headings, seatText };
+    const blockingText = clean([...document.querySelectorAll('.alert-danger, .error, .error-message, .validation-summary-errors, .swal2-validation-message, [role="alert"]')]
+      .filter(visible)
+      .map((element) => element.innerText || element.textContent)
+      .join(' '));
+    return { dialogs, activeStep, headings, seatText, blockingText };
   });
   return { url: page.url(), ...structure };
 }

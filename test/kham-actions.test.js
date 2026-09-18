@@ -221,6 +221,7 @@ test('Kham handoff requires an active checkout stage and rejects dialogs', () =>
   assert.equal(classifyKhamHandoff(checkout, 1), 'confirmed');
   assert.equal(classifyKhamHandoff({ ...checkout, activeStep: '', headings: [] }, 1), 'unknown');
   assert.equal(classifyKhamHandoff({ ...checkout, dialogs: [{ text: '系統忙碌' }] }, 1), 'blocked');
+  assert.equal(classifyKhamHandoff({ ...checkout, blockingText: '系統錯誤，請重新操作' }, 1), 'blocked');
   assert.equal(classifyKhamHandoff({ ...checkout, seatText: 'A區 3排 8號、A區 3排 10號' }, 2), 'separated');
 });
 
