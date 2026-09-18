@@ -57,6 +57,103 @@ export function rankKhamOffers(offers, { preferNonObstructed = true, allowObstru
     });
 }
 
+export function rankKhamAreas(rows, config = {}) {
+  return rankKhamOffers(rows, config).filter((row) => row.available === true);
+}
+
+export function classifyKhamInventory(snapshot) {
+  if (snapshot.loading) return { status: 'loading', availableRows: [] };
+  const availableRows = (snapshot.rows || []).filter((row) => row.available === true);
+  if (availableRows.length) return { status: 'available', availableRows };
+  if ((snapshot.rows || []).length) return { status: 'sold-out', availableRows: [] };
+  return { status: 'unknown', availableRows: [] };
+}
+
+export async function inspectKhamInventory(page) {
+  return page.evaluate(() => {
+    const isVisible = (element) => {
+      const style = window.getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return style.display !== 'none'
+        && style.visibility !== 'hidden'
+        && Number.parseFloat(style.opacity || '1') > 0
+        && rect.width > 0
+        && rect.height > 0;
+    };
+    const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+    const priceFrom = (text) => {
+      const explicit = text.match(/(?:NT\.?\s*)?[$＄]\s*([\d,]+)/i)
+        || text.match(/(?:票價|全票|vip)\D{0,12}([\d,]{4,})/i);
+      if (explicit) return Number.parseInt(explicit[1].replaceAll(',', ''), 10);
+      const values = [...text.matchAll(/(?:^|\D)([\d,]{4,5})(?=\D|$)/g)]
+        .map((match) => Number.parseInt(match[1].replaceAll(',', ''), 10))
+        .filter((value) => value >= 2_500 && value <= 20_000);
+      return values.length ? Math.max(...values) : 0;
+    };
+    const loadingSelectors = [
+      '.blockUI',
+      '.blockOverlay',
+      '.loading-mask',
+      '.loading-overlay',
+      '.spinner-border',
+      '.fa-spinner',
+      '.glyphicon-refresh-animate',
+      '[aria-busy="true"]',
+    ].join(',');
+    const loading = [...document.querySelectorAll(loadingSelectors)].some(isVisible);
+    const allRows = [...document.querySelectorAll('tr')];
+    const rows = allRows.flatMap((row, domIndex) => {
+      if (!isVisible(row)) return [];
+      const text = clean(row.innerText || row.textContent);
+      const price = priceFrom(text);
+      if (!price) return [];
+      const soldOut = /已售完|銷售一空|目前無票|票券已售罄|sold\s*out/i.test(text);
+      const controls = [...row.querySelectorAll('a, button, input, [onclick]')]
+        .filter((element) => isVisible(element) && !element.disabled);
+      const rowClickable = row.hasAttribute('onclick') || controls.length > 0;
+      return [{
+        index: domIndex,
+        text,
+        price,
+        available: !soldOut && rowClickable,
+      }];
+    });
+    return { loading, rows };
+  });
+}
+
+export async function waitForKhamInventory(page, timeoutMs = 15_000) {
+  const deadline = Date.now() + timeoutMs;
+  let snapshot = await inspectKhamInventory(page);
+  while (snapshot.loading && Date.now() < deadline) {
+    await page.waitForTimeout(100);
+    snapshot = await inspectKhamInventory(page);
+  }
+  return snapshot;
+}
+
+export async function refreshKhamInventory(page) {
+  const control = page
+    .getByRole('button', { name: /更新票數/ })
+    .or(page.getByRole('link', { name: /更新票數/ }))
+    .first();
+  if (!(await control.count())) return false;
+  if (!(await control.isVisible().catch(() => false))) return false;
+  if (!(await control.isEnabled().catch(() => false))) return false;
+  await control.click();
+  return true;
+}
+
+export async function selectBestKhamArea(page, snapshot, config = {}) {
+  const area = rankKhamAreas(snapshot.rows || [], config)[0];
+  if (!area) return { selected: false, reason: 'no-compatible-area' };
+  const row = page.locator('tr').nth(area.index);
+  const control = row.locator('a, button, input:not([type="hidden"]), [onclick]').first();
+  if (await control.count()) await control.click();
+  else await row.click();
+  return { selected: true, area };
+}
+
 export async function pageText(page) {
   return page.locator('body').innerText().catch(() => '');
 }

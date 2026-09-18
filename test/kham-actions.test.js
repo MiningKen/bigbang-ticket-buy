@@ -3,11 +3,13 @@ import assert from 'node:assert/strict';
 
 import {
   classifyKhamPage,
+  classifyKhamInventory,
   clickBestKhamPurchaseOption,
   dismissKhamRealNameNotice,
   fillKhamCardPrefix,
   normalizeKhamCardPrefix,
   priceFromKhamText,
+  rankKhamAreas,
   rankKhamOffers,
   submitKhamCardValidation,
 } from '../src/kham-actions.js';
@@ -129,6 +131,42 @@ test('sale instructions saying sold out eventually are not treated as a sold-out
   assert.equal(classifyKhamPage('Priority purchase does not guarantee a better queue number.'), 'unknown');
   assert.equal(classifyKhamPage('您正在排隊中，請耐心等候進入'), 'challenge');
   assert.equal(classifyKhamPage('本場次已售完'), 'sold-out');
+});
+
+test('inventory loading prevents sold-out classification', () => {
+  assert.deepEqual(classifyKhamInventory({
+    loading: true,
+    rows: [{ text: '平面A2區 8380 已售完', price: 8380, available: false }],
+  }), { status: 'loading', availableRows: [] });
+});
+
+test('stable inventory is sold out only when every scoped row is unavailable', () => {
+  assert.equal(classifyKhamInventory({
+    loading: false,
+    rows: [
+      { text: 'A區 8380 已售完', price: 8380, available: false },
+      { text: 'B區 8380 已售完', price: 8380, available: false },
+    ],
+  }).status, 'sold-out');
+
+  assert.equal(classifyKhamInventory({
+    loading: false,
+    rows: [
+      { text: 'A區 8380 已售完', price: 8380, available: false },
+      { text: 'B區 8380 尚有座位', price: 8380, available: true },
+    ],
+  }).status, 'available');
+});
+
+test('inventory ranking excludes accessible areas and prefers non-obstructed inventory', () => {
+  const ranked = rankKhamAreas([
+    { index: 0, text: '輪椅席 9430', price: 9430, available: true },
+    { index: 1, text: '視線遮蔽區 9380', price: 9380, available: true },
+    { index: 2, text: '一般區 8880', price: 8880, available: true },
+    { index: 3, text: '一般區 8380 已售完', price: 8380, available: false },
+  ]);
+
+  assert.deepEqual(ranked.map((row) => row.index), [2, 1]);
 });
 
 test('Kham card prefix accepts exactly six digits', () => {
