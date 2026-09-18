@@ -5,16 +5,27 @@ import { chromium } from 'playwright-core';
 import { pageForExistingContext } from './browser-session.js';
 import {
   classifyKhamPage,
+  clickBestKhamPurchaseOption,
   clickKhamBuy,
   clickKhamNext,
+  fillKhamCardPrefix,
   hasKhamCardValidation,
+  normalizeKhamCardPrefix,
   pageText,
   selectKhamOffer,
   selectKhamVipBenefit,
+  submitKhamCardValidation,
 } from './kham-actions.js';
 import { readKhamConfig } from './kham-config.js';
 
 const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+const ACTION_DISCOVERY_TIMEOUT_MS = 8_000;
+const FALLBACK_REASONS = new Set([
+  'buy-button-not-found',
+  'no-purchase-option',
+  'no-compatible-offer',
+  'sold-out',
+]);
 
 export class KhamController {
   constructor(cwd = process.cwd()) {
@@ -22,6 +33,7 @@ export class KhamController {
     this.envPath = `${cwd}/.kham.env`;
     this.context = null;
     this.page = null;
+    this.cardPrefix = null;
     this.stopRequested = false;
     this.state = {
       running: false,
@@ -45,6 +57,7 @@ export class KhamController {
     const config = this.getConfig();
     return {
       ...this.state,
+      cardPrefixReady: this.cardPrefix !== null,
       config: {
         primary: config.primary.label,
         fallback: config.fallback.label,
@@ -54,6 +67,12 @@ export class KhamController {
         autoAdvance: config.autoAdvance,
       },
     };
+  }
+
+  setCardPrefix(value) {
+    this.cardPrefix = normalizeKhamCardPrefix(value);
+    this.log('已在記憶體暫存中信卡號前 6 碼；關閉程式後會自動清除');
+    return this.publicState();
   }
 
   log(message) {
@@ -68,6 +87,7 @@ export class KhamController {
     this.state.alertId += 1;
     this.state.alertMessage = message;
     this.log(message);
+    void this.page?.bringToFront().catch(() => {});
   }
 
   async ensureBrowser() {
@@ -165,19 +185,37 @@ export class KhamController {
     }
   }
 
+  async enterSale(product) {
+    const page = this.page;
+    await page.goto(product.url, { waitUntil: 'domcontentloaded' });
+
+    for (let attempt = 0; attempt < 10 && !this.stopRequested; attempt += 1) {
+      if (await clickKhamBuy(page).catch(() => false)) return true;
+      await sleep(500);
+      if (attempt === 2 || attempt === 5 || attempt === 8) {
+        await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+      }
+    }
+
+    return false;
+  }
+
   async runProduct(product, config) {
     const page = this.page;
     this.state.phase = 'entering-sale';
     this.log(`前往 ${product.label}`);
-    await page.goto(product.url, { waitUntil: 'domcontentloaded' });
-
-    if (!(await clickKhamBuy(page))) {
+    if (!(await this.enterSale(product))) {
       return { reason: 'buy-button-not-found' };
     }
     this.log(`已點擊 ${product.date} 官方購票按鈕`);
 
     let cardPrompted = false;
+    let cardPrefixFilled = false;
+    let cardSubmittedAt = null;
+    let cardStalledPrompted = false;
     let challengePrompted = false;
+    let purchaseOptionClicked = false;
+    let noActionSince = Date.now();
     const deadline = Date.now() + 20 * 60_000;
     while (!this.stopRequested && Date.now() < deadline) {
       const text = await pageText(page);
@@ -195,18 +233,51 @@ export class KhamController {
 
       if (await hasKhamCardValidation(page)) {
         this.state.phase = 'waiting-card';
+        purchaseOptionClicked = true;
+        noActionSince = Date.now();
+        if (this.cardPrefix && !cardPrefixFilled) {
+          cardPrefixFilled = await fillKhamCardPrefix(page, this.cardPrefix);
+          if (cardPrefixFilled) {
+            const submitted = await submitKhamCardValidation(page).catch(() => false);
+            if (submitted) {
+              cardSubmittedAt = Date.now();
+              this.log('已自動填入中信卡號前 6 碼並送出卡友驗證');
+            } else {
+              this.alert('已自動填入中信卡號前 6 碼，但找不到明確的驗證按鈕；請立即手動送出');
+            }
+            await sleep(800);
+            continue;
+          }
+        }
+        if (cardSubmittedAt && Date.now() - cardSubmittedAt >= 3_000 && !cardStalledPrompted) {
+          cardStalledPrompted = true;
+          this.alert('卡友驗證視窗仍未關閉，可能驗證失敗；請立即查看寬宏訊息並手動處理');
+        }
         if (!cardPrompted) {
           cardPrompted = true;
-          this.alert('請自行輸入中信卡號前 6 碼並完成驗證；程式不會讀取或儲存卡號');
+          this.alert(this.cardPrefix
+            ? '找不到可自動填寫的卡號驗證欄位，請立即手動輸入前 6 碼'
+            : '請自行輸入中信卡號前 6 碼並完成驗證；也可在控制面板先暫存 6 碼');
         }
         await sleep(800);
         continue;
       }
 
-      if (stage === 'sold-out') return { reason: 'sold-out' };
+      if (!purchaseOptionClicked) {
+        const purchase = await clickBestKhamPurchaseOption(page, config).catch(() => ({ clicked: false }));
+        if (purchase.clicked) {
+          purchaseOptionClicked = true;
+          noActionSince = Date.now();
+          this.state.ticketStatus = `嘗試 ${purchase.option.price} 元`;
+          this.log(`已依偏好點擊「立即訂購」：${purchase.option.text}`);
+          await sleep(250);
+          continue;
+        }
+      }
 
       const selected = await selectKhamOffer(page, config).catch(() => ({ selected: false }));
       if (selected.selected) {
+        noActionSince = Date.now();
         this.state.phase = 'selecting';
         this.state.ticketStatus = `已選 ${selected.offer.text}`;
         this.log(`已選擇：${selected.offer.text}`);
@@ -224,7 +295,13 @@ export class KhamController {
         return { reason: 'selected' };
       }
 
-      await sleep(700);
+      if (stage === 'sold-out') return { reason: 'sold-out' };
+
+      if (Date.now() - noActionSince >= ACTION_DISCOVERY_TIMEOUT_MS) {
+        return { reason: purchaseOptionClicked ? 'no-compatible-offer' : 'no-purchase-option' };
+      }
+
+      await sleep(350);
     }
 
     return { reason: this.stopRequested ? 'stopped' : 'timed-out' };
@@ -238,13 +315,18 @@ export class KhamController {
 
     try {
       const config = this.getConfig();
+      if (!this.cardPrefix) throw new Error('請先在控制面板安全暫存中信卡號前 6 碼');
       await this.ensureBrowser();
+      await this.refreshLoginStatus();
+      if (this.state.loginStatus !== 'logged-in') {
+        this.log('警告：無法確認寬宏登入狀態，請立即在購票 Chrome 檢查會員是否仍已登入');
+      }
       await this.waitForSaleStart(config);
       if (this.stopRequested) return;
 
       const primary = await this.runProduct(config.primary, config);
-      if (primary.reason === 'sold-out') {
-        this.log('2/28 已無可購票券，依設定改嘗試 2/27');
+      if (FALLBACK_REASONS.has(primary.reason)) {
+        this.log(`2/28 未取得可購票券（${primary.reason}），立即改嘗試 2/27`);
         const fallback = await this.runProduct(config.fallback, config);
         if (fallback.reason !== 'selected') this.alert(`2/27 流程停止：${fallback.reason}，請立即查看寬宏 Chrome`);
       } else if (primary.reason !== 'selected') {

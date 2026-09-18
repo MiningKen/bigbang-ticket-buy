@@ -7,6 +7,9 @@ const elements = {
   settings: document.querySelector('#settings'),
   logs: document.querySelector('#logs'),
   toast: document.querySelector('#toast'),
+  cardPrefixForm: document.querySelector('#cardPrefixForm'),
+  cardPrefix: document.querySelector('#cardPrefix'),
+  cardPrefixStatus: document.querySelector('#cardPrefixStatus'),
   openLogin: document.querySelector('#openLogin'),
   start: document.querySelector('#start'),
   stop: document.querySelector('#stop'),
@@ -35,7 +38,7 @@ function phaseLabel(phase) {
     starting: '正在啟動',
     'waiting-sale': '等待 14:00 開賣',
     'entering-sale': '進入官方購票流程',
-    'waiting-card': '等待你輸入卡號前 6 碼',
+    'waiting-card': '正在自動送出卡友驗證',
     selecting: '正在選擇票種',
     'manual-action': '等待你接手',
     error: '發生錯誤',
@@ -84,13 +87,16 @@ function render(state) {
   elements.salePlan.textContent = `開賣：${new Date(state.config.saleStart).toLocaleString('zh-TW', { hour12: false })}`;
   elements.start.disabled = state.running;
   elements.stop.disabled = !state.running;
+  elements.cardPrefixStatus.textContent = state.cardPrefixReady
+    ? '已暫存在記憶體；關閉程式後會自動清除。'
+    : '尚未暫存；不會寫入設定檔或操作紀錄。';
 
   const settings = [
     `首選：${state.config.primary}（1 張）`,
     `備案：${state.config.fallback}`,
     '不選輪椅／身障席；非遮蔽區優先，再依票價高至低',
     `VIP 粉絲福利：${state.config.wantVipBenefit ? '要' : '不要'}；自動下一步：${state.config.autoAdvance ? '開啟' : '關閉'}`,
-    '卡號、實名制資料、驗證與付款一律由你在寬宏頁面自行處理。',
+    `卡號前 6 碼及卡友驗證自動送出：${state.cardPrefixReady ? '已準備' : '尚未設定'}；完整卡號與付款由你處理。`,
   ];
   elements.settings.innerHTML = settings.map((item) => `<li><span>${escapeHtml(item)}</span></li>`).join('');
   elements.logs.innerHTML = state.logs.length
@@ -130,6 +136,22 @@ async function runAction(path) {
 }
 
 elements.openLogin.addEventListener('click', () => runAction('/api/open-login'));
+elements.cardPrefixForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  elements.toast.textContent = '';
+  if (!elements.cardPrefix.reportValidity()) return;
+  try {
+    const state = await request('/api/card-prefix', {
+      method: 'POST',
+      body: JSON.stringify({ cardPrefix: elements.cardPrefix.value }),
+    });
+    elements.cardPrefix.value = '';
+    render(state);
+    elements.toast.textContent = '前 6 碼已安全暫存；偵測到驗證欄位時會自動填入並送出。';
+  } catch (error) {
+    elements.toast.textContent = error.message;
+  }
+});
 elements.start.addEventListener('click', () => {
   armAlerts();
   runAction('/api/start');

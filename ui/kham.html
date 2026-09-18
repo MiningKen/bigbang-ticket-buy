@@ -39,6 +39,24 @@
         </ol>
       </section>
 
+      <form id="cardPrefixForm" autocomplete="off">
+        <div class="field">
+          <label for="cardPrefix">中信卡號前 6 碼</label>
+          <input
+            id="cardPrefix"
+            type="password"
+            inputmode="numeric"
+            pattern="[0-9]{6}"
+            minlength="6"
+            maxlength="6"
+            placeholder="僅暫存在本次執行的記憶體"
+            required
+          />
+          <small id="cardPrefixStatus">尚未暫存；不會寫入設定檔或操作紀錄。</small>
+        </div>
+        <button class="secondary" type="submit">安全暫存 6 碼</button>
+      </form>
+
       <div class="actions">
         <button id="openLogin" class="secondary">開啟登入頁</button>
         <button id="start" class="primary">開始等待 14:00</button>

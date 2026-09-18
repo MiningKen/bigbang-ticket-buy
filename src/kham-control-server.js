@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium } from 'playwright-core';
@@ -15,6 +16,9 @@ const controller = new KhamController(root);
 let dashboardBrowser = null;
 let dashboardPage = null;
 let shuttingDown = false;
+const keepAwake = process.platform === 'darwin'
+  ? spawn('caffeinate', ['-dimsu', '-w', String(process.pid)], { stdio: 'ignore' })
+  : null;
 
 const contentTypes = {
   '.html': 'text/html; charset=utf-8',
@@ -36,6 +40,15 @@ function serveFile(response, filename) {
   return true;
 }
 
+async function readJson(request) {
+  let body = '';
+  for await (const chunk of request) {
+    body += chunk;
+    if (body.length > 1_024) throw new Error('Request body is too large');
+  }
+  return body ? JSON.parse(body) : {};
+}
+
 const server = createServer(async (request, response) => {
   try {
     if (request.method === 'GET' && request.url === '/api/state') {
@@ -44,6 +57,11 @@ const server = createServer(async (request, response) => {
     }
     if (request.method === 'POST' && request.url === '/api/open-login') {
       sendJson(response, 200, await controller.openLogin());
+      return;
+    }
+    if (request.method === 'POST' && request.url === '/api/card-prefix') {
+      const { cardPrefix } = await readJson(request);
+      sendJson(response, 200, controller.setCardPrefix(cardPrefix));
       return;
     }
     if (request.method === 'POST' && request.url === '/api/start') {
@@ -101,6 +119,7 @@ async function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
   await controller.close();
+  keepAwake?.kill();
   await dashboardBrowser?.close().catch(() => {});
   server.close(() => process.exit(0));
 }
