@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>寬宏搶票助手</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <p class="eyebrow">BIGBANG KAOHSIUNG · CTBC PRESALE</p>
+          <h1>寬宏搶票控制台</h1>
+        </div>
+        <span id="runningBadge" class="badge neutral">未啟動</span>
+      </header>
+
+      <section class="status-grid" aria-label="即時狀態">
+        <article>
+          <span>會員</span>
+          <strong id="loginStatus">尚未確認</strong>
+        </article>
+        <article>
+          <span>票況</span>
+          <strong id="ticketStatus">尚未啟動</strong>
+        </article>
+        <article class="wide">
+          <span>目前動作</span>
+          <strong id="phaseStatus">尚未啟動</strong>
+          <small id="salePlan"></small>
+        </article>
+      </section>
+
+      <section class="log-panel" aria-label="已鎖定設定">
+        <div class="log-title">已鎖定設定</div>
+        <ol id="settings">
+          <li>載入中</li>
+        </ol>
+      </section>
+
+      <div class="actions">
+        <button id="openLogin" class="secondary">開啟登入頁</button>
+        <button id="start" class="primary">開始等待 14:00</button>
+        <button id="stop" class="danger">停止</button>
+      </div>
+
+      <section class="log-panel">
+        <div class="log-title">操作紀錄</div>
+        <ol id="logs"><li>等待啟動</li></ol>
+      </section>
+      <p id="toast" role="status"></p>
+    </main>
+
+    <div id="alertOverlay" class="overlay" hidden>
+      <section class="alert-card" role="alertdialog" aria-modal="true" aria-labelledby="alertTitle">
+        <div class="pulse"></div>
+        <p class="eyebrow">需要你立即處理</p>
+        <h2 id="alertTitle">寬宏購票流程</h2>
+        <p id="alertMessage"></p>
+        <button id="focusTicket" class="primary">切換到寬宏視窗</button>
+        <button id="dismissAlert" class="secondary">關閉提示</button>
+      </section>
+    </div>
+    <script src="/kham-app.js" type="module"></script>
+  </body>
+</html>

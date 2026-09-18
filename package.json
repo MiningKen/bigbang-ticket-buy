@@ -6,6 +6,7 @@
   "description": "Conservative browser assistant for watching a Ticket Plus session and entering the purchase flow.",
   "scripts": {
     "app": "node src/control-server.js",
+    "kham": "node src/kham-control-server.js",
     "package:windows": "node scripts/build-windows-package.mjs",
     "configure": "node src/choose-session.js",
     "choose": "node src/choose-session.js",

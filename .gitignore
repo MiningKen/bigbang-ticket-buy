@@ -1,6 +1,8 @@
 node_modules/
 .ticketplus-profile/
 .ticketplus-panel-profile/
+.kham-profile/
 artifacts/
 .env
+.kham.env
 dist/

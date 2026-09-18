@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { parseEnv } from 'node:util';
 import { chromium } from 'playwright-core';
 
+import { pageForExistingContext } from './browser-session.js';
 import { nextPollDelay, readConfig } from './config.js';
 import {
   attemptTicketSelection,
@@ -92,14 +93,39 @@ export class TicketController {
     }
     mkdirSync(config.artifactsDir, { recursive: true });
 
+    if (this.context) {
+      try {
+        this.page = await pageForExistingContext(this.context, this.page);
+        this.configurePage(this.page);
+        await this.page.goto(config.ticketUrl, { waitUntil: 'domcontentloaded' });
+        this.state.browserOpen = true;
+        await this.refreshLoginStatus();
+        this.log('已重新使用既有的 Ticket Plus Chrome 分頁');
+        return this.page;
+      } catch (error) {
+        if (!/Target page, context or browser has been closed/i.test(error.message)) throw error;
+        this.context = null;
+        this.page = null;
+        this.state.browserOpen = false;
+      }
+    }
+
     this.log('正在開啟 Ticket Plus Chrome…');
-    this.context = await chromium.launchPersistentContext(config.profileDir, {
-      executablePath: config.chromePath,
-      headless: false,
-      viewport: null,
-    });
-    this.page = this.context.pages()[0] || (await this.context.newPage());
-    this.page.setDefaultTimeout(3_000);
+    try {
+      this.context = await chromium.launchPersistentContext(config.profileDir, {
+        executablePath: config.chromePath,
+        headless: false,
+        viewport: null,
+      });
+    } catch (error) {
+      if (/Target page, context or browser has been closed/i.test(error.message)) {
+        throw new Error('Ticket Plus Chrome 已在執行，但連線已遺失。請關閉那個專用 Chrome 視窗後，再按一次「開啟登入頁」。');
+      }
+      throw error;
+    }
+
+    this.page = await pageForExistingContext(this.context, this.page);
+    this.configurePage(this.page);
     this.context.on('close', () => {
       this.context = null;
       this.page = null;
@@ -113,6 +139,19 @@ export class TicketController {
     await this.refreshLoginStatus();
     this.log('Ticket Plus Chrome 已開啟');
     return this.page;
+  }
+
+  configurePage(page) {
+    page.setDefaultTimeout(3_000);
+    page.once('close', () => {
+      if (this.page !== page) return;
+      this.page = null;
+      this.state.loginStatus = 'unknown';
+      if (this.state.running) {
+        this.stopRequested = true;
+        this.log('Ticket Plus 分頁已關閉，監看已停止');
+      }
+    });
   }
 
   async refreshLoginStatus() {

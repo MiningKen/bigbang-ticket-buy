@@ -90,6 +90,9 @@ for (const file of [
   'package.json',
   'package-lock.json',
   '.env.example',
+  '.kham.env.example',
+  'KHAM-README.md',
+  'START-KHAM-WINDOWS.cmd',
   'START-WINDOWS.cmd',
   'WINDOWS-README.txt',
 ]) {
