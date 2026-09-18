@@ -6,7 +6,8 @@ const CHALLENGE_PATTERN = /驗證碼|captcha|我不是機器人|正在排隊|排
 const CARD_VALIDATION_PATTERN = /(?:信用)?卡號前\s*(?:6|六)\s*碼|信用卡前\s*(?:6|六)\s*碼|輸入.*卡號/i;
 const PURCHASE_LABEL_PATTERN = /^立即訂購$/;
 const REAL_NAME_NOTICE_PATTERN = /本節目採[「\s]*個人實名制入場/;
-const ADJACENT_UNAVAILABLE_PATTERN = /(?:無法|不能|未能|沒有).{0,12}(?:連號|相鄰)|(?:連號|相鄰).{0,12}(?:無法|不足|沒有)/i;
+const ADJACENT_UNAVAILABLE_PATTERN = /(?:無法|不能|未能|沒有|不足|無).{0,12}(?:連號|相鄰|連續座位)|(?:連號|相鄰|連續座位).{0,12}(?:無法|不足|沒有)/i;
+const ADJACENT_CONFIRMED_PATTERN = /(?:成功|已|系統).{0,16}(?:配置|分配|取得).{0,8}(?:兩張)?(?:連號|相鄰)(?:座位)?/i;
 
 function parseKhamSeatLabels(value) {
   const text = Array.isArray(value) ? value.join('、') : String(value || '');
@@ -33,6 +34,7 @@ export function classifyKhamAllocation(text, requestedCount) {
   }
   if (requestedCount !== 2) return 'unknown';
   if (ADJACENT_UNAVAILABLE_PATTERN.test(normalized)) return 'adjacent-unavailable';
+  if (ADJACENT_CONFIRMED_PATTERN.test(normalized)) return 'confirmed';
   const seats = parseKhamSeatLabels(normalized);
   if (seats.length < 2) return 'unknown';
   return areKhamSeatsAdjacent(seats.map((seat) => `${seat.area} ${seat.row}排 ${seat.seat}號`))
@@ -141,7 +143,7 @@ export async function inspectKhamInventory(page) {
       const price = priceFrom(text);
       if (!price) return [];
       const soldOut = /已售完|銷售一空|目前無票|票券已售罄|sold\s*out/i.test(text);
-      const controls = [...row.querySelectorAll('a, button, input, [onclick]')]
+      const controls = [...row.querySelectorAll('a, button, select, input, [onclick]')]
         .filter((element) => isVisible(element) && !element.disabled);
       const rowClickable = row.hasAttribute('onclick') || controls.length > 0;
       return [{
@@ -181,8 +183,12 @@ export async function selectBestKhamArea(page, snapshot, config = {}) {
   const area = rankKhamAreas(snapshot.rows || [], config)[0];
   if (!area) return { selected: false, reason: 'no-compatible-area' };
   const row = page.locator('tr').nth(area.index);
-  const control = row.locator('a, button, input:not([type="hidden"]), [onclick]').first();
-  if (await control.count()) await control.click();
+  const control = row.locator('a, button, select, input:not([type="hidden"]), [onclick]').first();
+  if (await control.count()) {
+    const tagName = await control.evaluate((element) => element.tagName).catch(() => '');
+    if (tagName === 'SELECT') return { selected: false, reason: 'quantity-unavailable' };
+    await control.click();
+  }
   else await row.click();
   return { selected: true, area };
 }
@@ -385,9 +391,9 @@ export async function scanKhamPurchaseOptions(page) {
   return options;
 }
 
-export async function clickBestKhamPurchaseOption(page, config) {
+export async function clickBestKhamPurchaseOption(page, config, optionRank = 0) {
   const options = rankKhamOffers(await scanKhamPurchaseOptions(page), config);
-  const option = options[0];
+  const option = options[optionRank];
   if (!option) return { clicked: false, reason: 'no-purchase-option' };
   await option.control.click();
   return { clicked: true, option: { text: option.text, price: option.price } };

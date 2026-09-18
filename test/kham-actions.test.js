@@ -181,6 +181,8 @@ test('Kham adjacency requires the same area and row with consecutive seat number
 
 test('Kham allocation rejects an explicitly non-adjacent pair and recognizes confirmed seats', () => {
   assert.equal(classifyKhamAllocation('無法配置兩張連號座位', 2), 'adjacent-unavailable');
+  assert.equal(classifyKhamAllocation('剩餘座位不足，無連續座位', 2), 'adjacent-unavailable');
+  assert.equal(classifyKhamAllocation('系統已成功配置兩張連號座位', 2), 'confirmed');
   assert.equal(classifyKhamAllocation('A區 3排 8號、A區 3排 9號', 2), 'confirmed');
   assert.equal(classifyKhamAllocation('A區 3排 8號、A區 3排 10號', 2), 'adjacent-unavailable');
   assert.equal(classifyKhamAllocation('A區 3排 8號', 1), 'single-confirmed');
