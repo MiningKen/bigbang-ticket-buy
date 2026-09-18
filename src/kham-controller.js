@@ -8,8 +8,10 @@ import {
   clickBestKhamPurchaseOption,
   clickKhamBuy,
   clickKhamNext,
+  dismissKhamRealNameNotice,
   fillKhamCardPrefix,
   hasKhamCardValidation,
+  inspectKhamPage,
   normalizeKhamCardPrefix,
   pageText,
   selectKhamOffer,
@@ -88,6 +90,19 @@ export class KhamController {
     this.state.alertMessage = message;
     this.log(message);
     void this.page?.bringToFront().catch(() => {});
+  }
+
+  async recordDiagnostic(label, config, { screenshot = false } = {}) {
+    const evidence = await inspectKhamPage(this.page).catch((error) => ({ error: error.message }));
+    this.log(`診斷［${label}］：${JSON.stringify(evidence)}`);
+    if (screenshot && !await hasKhamCardValidation(this.page).catch(() => false)) {
+      const safeLabel = label.replace(/[^a-zA-Z0-9\u4e00-\u9fff-]+/g, '-');
+      await this.page.screenshot({
+        path: `${config.artifactsDir}/kham-diagnostic-${Date.now()}-${safeLabel}.png`,
+        fullPage: true,
+      }).catch(() => {});
+    }
+    return evidence;
   }
 
   async ensureBrowser() {
@@ -188,14 +203,22 @@ export class KhamController {
   async enterSale(product) {
     const page = this.page;
     await page.goto(product.url, { waitUntil: 'domcontentloaded' });
+    let noticeDismissed = false;
 
     for (let attempt = 0; attempt < 10 && !this.stopRequested; attempt += 1) {
+      if (await dismissKhamRealNameNotice(page).catch(() => false)) {
+        noticeDismissed = true;
+        this.log('已確認官方個人實名制提示，繼續進入購票流程');
+        await sleep(100);
+      }
       if (await clickKhamBuy(page).catch(() => false)) return true;
       await sleep(500);
       if (attempt === 2 || attempt === 5 || attempt === 8) {
         await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
       }
     }
+
+    if (noticeDismissed) this.log('已關閉實名制提示，但仍找不到可用的官方購票按鈕');
 
     return false;
   }
@@ -205,6 +228,7 @@ export class KhamController {
     this.state.phase = 'entering-sale';
     this.log(`前往 ${product.label}`);
     if (!(await this.enterSale(product))) {
+      await this.recordDiagnostic('找不到官方購票按鈕', config, { screenshot: true });
       return { reason: 'buy-button-not-found' };
     }
     this.log(`已點擊 ${product.date} 官方購票按鈕`);
@@ -213,6 +237,7 @@ export class KhamController {
     let cardPrefixFilled = false;
     let cardSubmittedAt = null;
     let cardStalledPrompted = false;
+    let cardEvidenceCaptured = false;
     let challengePrompted = false;
     let purchaseOptionClicked = false;
     let noActionSince = Date.now();
@@ -235,6 +260,10 @@ export class KhamController {
         this.state.phase = 'waiting-card';
         purchaseOptionClicked = true;
         noActionSince = Date.now();
+        if (!cardEvidenceCaptured) {
+          cardEvidenceCaptured = true;
+          await this.recordDiagnostic('偵測到六碼視窗（填寫前）', config);
+        }
         if (this.cardPrefix && !cardPrefixFilled) {
           cardPrefixFilled = await fillKhamCardPrefix(page, this.cardPrefix);
           if (cardPrefixFilled) {
@@ -246,6 +275,7 @@ export class KhamController {
               this.alert('已自動填入中信卡號前 6 碼，但找不到明確的驗證按鈕；請立即手動送出');
             }
             await sleep(800);
+            await this.recordDiagnostic('送出六碼後', config, { screenshot: true });
             continue;
           }
         }
@@ -271,6 +301,7 @@ export class KhamController {
           this.state.ticketStatus = `嘗試 ${purchase.option.price} 元`;
           this.log(`已依偏好點擊「立即訂購」：${purchase.option.text}`);
           await sleep(250);
+          await this.recordDiagnostic('點擊立即訂購後', config, { screenshot: true });
           continue;
         }
       }
@@ -295,7 +326,10 @@ export class KhamController {
         return { reason: 'selected' };
       }
 
-      if (stage === 'sold-out') return { reason: 'sold-out' };
+      if (stage === 'sold-out') {
+        await this.recordDiagnostic('判定售完前', config, { screenshot: true });
+        return { reason: 'sold-out' };
+      }
 
       if (Date.now() - noActionSince >= ACTION_DISCOVERY_TIMEOUT_MS) {
         return { reason: purchaseOptionClicked ? 'no-compatible-offer' : 'no-purchase-option' };

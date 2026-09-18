@@ -5,6 +5,7 @@ const SOLD_OUT_PATTERN = /已售完|銷售一空|目前無票|暫無票券|票�
 const CHALLENGE_PATTERN = /驗證碼|captcha|我不是機器人|正在排隊|排隊中|等候進入|waiting\s*room|you\s+are\s+(?:now\s+)?in\s+line/i;
 const CARD_VALIDATION_PATTERN = /(?:信用)?卡號前\s*(?:6|六)\s*碼|信用卡前\s*(?:6|六)\s*碼|輸入.*卡號/i;
 const PURCHASE_LABEL_PATTERN = /^立即訂購$/;
+const REAL_NAME_NOTICE_PATTERN = /本節目採[「\s]*個人實名制入場/;
 
 export function priceFromKhamText(text) {
   const explicit = String(text || '').match(/(?:NT\.?\s*)?[$＄]\s*([\d,]+)/i)
@@ -58,6 +59,87 @@ export function rankKhamOffers(offers, { preferNonObstructed = true, allowObstru
 
 export async function pageText(page) {
   return page.locator('body').innerText().catch(() => '');
+}
+
+export async function inspectKhamPage(page) {
+  const structure = await page.evaluate(() => {
+    const isVisible = (element) => {
+      const style = window.getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return style.display !== 'none'
+        && style.visibility !== 'hidden'
+        && Number.parseFloat(style.opacity || '1') > 0
+        && rect.width > 0
+        && rect.height > 0;
+    };
+    const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim().slice(0, 1_000);
+    const dialogSelectors = [
+      '[role="dialog"]',
+      '.ui-dialog',
+      '.modal',
+      '.swal2-popup',
+      '.bootbox',
+      '[class*="popup"]',
+      '[id*="popup"]',
+    ].join(',');
+    const dialogs = [...document.querySelectorAll(dialogSelectors)]
+      .filter(isVisible)
+      .map((element) => ({
+        text: clean(element.innerText || element.textContent),
+        controls: [...element.querySelectorAll('button, input[type="button"], input[type="submit"], a')]
+          .filter(isVisible)
+          .map((control) => clean(control.innerText || control.value || control.textContent))
+          .filter(Boolean)
+          .slice(0, 20),
+      }))
+      .filter((dialog) => dialog.text);
+    const visibleInputs = [...document.querySelectorAll('input:not([type="hidden"]), select')]
+      .filter(isVisible)
+      .map((element) => ({
+        type: element.tagName === 'SELECT' ? 'select' : (element.type || 'text'),
+        name: clean(element.name),
+        id: clean(element.id),
+        placeholder: clean(element.placeholder),
+      }));
+    return { dialogs, visibleInputs };
+  });
+
+  return {
+    url: page.url(),
+    title: await page.title().catch(() => ''),
+    ...structure,
+  };
+}
+
+export async function dismissKhamRealNameNotice(page) {
+  const dialogs = page.locator([
+    '[role="dialog"]',
+    '.ui-dialog',
+    '.modal',
+    '.swal2-popup',
+    '.bootbox',
+    '[class*="popup"]',
+    '[id*="popup"]',
+  ].join(','));
+
+  for (let index = 0; index < await dialogs.count(); index += 1) {
+    const dialog = dialogs.nth(index);
+    if (!(await dialog.isVisible().catch(() => false))) continue;
+    const text = await dialog.innerText().catch(() => '');
+    if (!REAL_NAME_NOTICE_PATTERN.test(text)) continue;
+
+    const confirm = dialog
+      .getByRole('button', { name: /^(?:Ok|確定)$/i })
+      .or(dialog.getByRole('link', { name: /^(?:Ok|確定)$/i }))
+      .first();
+    if (!(await confirm.count())) return false;
+    if (!(await confirm.isVisible().catch(() => false))) return false;
+    if (!(await confirm.isEnabled().catch(() => false))) return false;
+    await confirm.click();
+    return true;
+  }
+
+  return false;
 }
 
 export function classifyKhamPage(text) {

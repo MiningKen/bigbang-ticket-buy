@@ -4,12 +4,66 @@ import assert from 'node:assert/strict';
 import {
   classifyKhamPage,
   clickBestKhamPurchaseOption,
+  dismissKhamRealNameNotice,
   fillKhamCardPrefix,
   normalizeKhamCardPrefix,
   priceFromKhamText,
   rankKhamOffers,
   submitKhamCardValidation,
 } from '../src/kham-actions.js';
+import * as khamActions from '../src/kham-actions.js';
+
+test('Kham diagnostics expose page structure without input values', async () => {
+  assert.equal(typeof khamActions.inspectKhamPage, 'function');
+
+  const page = {
+    url: () => 'https://kham.example/checkout',
+    title: async () => '寬宏售票系統',
+    evaluate: async () => ({
+      dialogs: [{ text: '目前無法購票', controls: ['確定'] }],
+      visibleInputs: [{ type: 'text', name: 'card-prefix', placeholder: '卡號前六碼' }],
+    }),
+  };
+
+  const evidence = await khamActions.inspectKhamPage(page);
+
+  assert.deepEqual(evidence, {
+    url: 'https://kham.example/checkout',
+    title: '寬宏售票系統',
+    dialogs: [{ text: '目前無法購票', controls: ['確定'] }],
+    visibleInputs: [{ type: 'text', name: 'card-prefix', placeholder: '卡號前六碼' }],
+  });
+  assert.equal(JSON.stringify(evidence).includes('418230'), false);
+});
+
+test('Kham dismisses only the known real-name informational notice', async () => {
+  const dialogs = [
+    { text: '未知錯誤，請確認', clicked: false },
+    { text: '訊息視窗 本節目採「個人實名制入場」，請於購票前再次確認會員本人資料 Ok', clicked: false },
+  ];
+  const collection = {
+    count: async () => dialogs.length,
+    nth: (index) => ({
+      isVisible: async () => true,
+      innerText: async () => dialogs[index].text,
+      getByRole: () => {
+        const control = {
+          or: () => control,
+          first: () => control,
+          count: async () => 1,
+          isVisible: async () => true,
+          isEnabled: async () => true,
+          click: async () => { dialogs[index].clicked = true; },
+        };
+        return control;
+      },
+    }),
+  };
+  const page = { locator: () => collection };
+
+  assert.equal(await dismissKhamRealNameNotice(page), true);
+  assert.deepEqual(dialogs.map((dialog) => dialog.clicked), [false, true]);
+});
 
 test('Kham ranking excludes wheelchair and fan-benefit-only options', () => {
   const ranked = rankKhamOffers([
