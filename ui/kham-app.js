@@ -1,4 +1,5 @@
 const elements = {
+  saleModeLabel: document.querySelector('#saleModeLabel'),
   runningBadge: document.querySelector('#runningBadge'),
   loginStatus: document.querySelector('#loginStatus'),
   ticketStatus: document.querySelector('#ticketStatus'),
@@ -34,11 +35,11 @@ async function request(path, options = {}) {
   return payload;
 }
 
-function phaseLabel(phase) {
+function phaseLabel(phase, config) {
   return {
     idle: '尚未啟動',
     starting: '正在啟動',
-    'waiting-sale': '等待 9/22 10:00 開賣',
+    'waiting-sale': config.saleMode === 'general-sale' ? '等待 9/22 10:00 開賣' : '等待中信卡友演練',
     'entering-sale': '進入官方購票流程',
     'waiting-card': '正在自動送出卡友驗證',
     'refresh-wait': '等待下一次更新票數',
@@ -88,7 +89,10 @@ function render(state) {
   elements.runningBadge.className = `badge ${state.running ? 'good' : 'neutral'}`;
   elements.loginStatus.textContent = loginLabel(state.loginStatus);
   elements.ticketStatus.textContent = state.ticketStatus || '尚未啟動';
-  elements.phaseStatus.textContent = phaseLabel(state.phase);
+  elements.phaseStatus.textContent = phaseLabel(state.phase, state.config);
+  elements.saleModeLabel.textContent = state.config.saleMode === 'general-sale'
+    ? 'BIGBANG KAOHSIUNG · GENERAL SALE'
+    : 'BIGBANG KAOHSIUNG · CTBC REHEARSAL';
   elements.salePlan.textContent = `開賣：${new Date(state.config.saleStart).toLocaleString('zh-TW', { hour12: false })}`;
   elements.start.disabled = state.running;
   elements.stop.disabled = !state.running;

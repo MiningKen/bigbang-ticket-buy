@@ -4,7 +4,8 @@ import { chromium } from 'playwright-core';
 
 import { pageForExistingContext } from './browser-session.js';
 import {
-  classifyKhamAllocation,
+  acceptKhamTerms,
+  classifyKhamHandoff,
   classifyKhamInventory,
   classifyKhamPage,
   clickBestKhamPurchaseOption,
@@ -14,6 +15,7 @@ import {
   fillKhamCardPrefix,
   hasKhamCardValidation,
   inspectKhamPage,
+  inspectKhamHandoff,
   refreshKhamInventory,
   normalizeKhamCardPrefix,
   pageText,
@@ -23,6 +25,7 @@ import {
   selectKhamVipBenefit,
   submitKhamCardValidation,
   waitForKhamInventory,
+  waitForKhamInventoryRefresh,
 } from './kham-actions.js';
 import { readKhamConfig } from './kham-config.js';
 import { buildKhamAttemptPlan, KHAM_TICKET_MODES, nextKhamRefreshDelay } from './kham-strategy.js';
@@ -85,6 +88,9 @@ export class KhamController {
   }
 
   setCardPrefix(value) {
+    if (this.getConfig().saleMode !== 'ctbc-rehearsal') {
+      throw new Error('一般販售模式不接受或暫存信用卡前 6 碼');
+    }
     this.cardPrefix = normalizeKhamCardPrefix(value);
     this.log('已在記憶體暫存中信卡號前 6 碼；關閉程式後會自動清除');
     return this.publicState();
@@ -320,19 +326,19 @@ export class KhamController {
         continue;
       }
 
+      const evidence = await inspectKhamPage(page).catch(() => null);
+      if (evidence?.dialogs?.length) {
+        await this.recordDiagnostic('未知訊息視窗', config, { screenshot: true });
+        this.alert('偵測到未識別的寬宏訊息視窗，已停止自動操作；請手動檢查');
+        return { reason: 'blocked' };
+      }
+
       const snapshot = await waitForKhamInventory(page, 1_000).catch(() => null);
       if (snapshot) {
         const inventory = classifyKhamInventory(snapshot);
         if (inventory.status !== 'unknown' && inventory.status !== 'loading') {
           return { reason: 'inventory', snapshot, inventory };
         }
-      }
-
-      const evidence = await inspectKhamPage(page).catch(() => null);
-      if (evidence?.dialogs?.length) {
-        await this.recordDiagnostic('未知訊息視窗', config, { screenshot: true });
-        this.alert('偵測到未識別的寬宏訊息視窗，已停止自動操作；請手動檢查');
-        return { reason: 'blocked' };
       }
       await sleep(200);
     }
@@ -371,6 +377,14 @@ export class KhamController {
       const benefitSelected = await selectKhamVipBenefit(page).catch(() => false);
       this.log(benefitSelected ? '已嘗試加選 VIP 粉絲福利' : '本票種未偵測到可加選的 VIP 粉絲福利');
     }
+    if (config.acceptTerms) {
+      const terms = await acceptKhamTerms(page).catch(() => 'failed');
+      if (terms === 'failed') {
+        this.alert('偵測到購票條款，但無法確認已勾選；已停止自動操作');
+        return { reason: 'blocked' };
+      }
+      if (terms === 'accepted') this.log('已依設定勾選並接受購票條款');
+    }
     if (!config.autoAdvance) {
       this.alert('已完成票數選擇；自動下一步未開啟，請立即手動接手');
       return { reason: 'blocked' };
@@ -381,18 +395,22 @@ export class KhamController {
       this.alert('找不到安全的下一步按鈕，已停止自動操作；請立即手動接手');
       return { reason: 'blocked' };
     }
-    const resultText = await pageText(page);
-    if (attempt.adjacencyRequired) {
-      const allocation = classifyKhamAllocation(resultText, 2);
-      if (allocation === 'adjacent-unavailable') {
-        this.log(`${attempt.product.date} 無法配置兩張連號，繼續下一順位`);
-        return { reason: 'adjacent-unavailable' };
-      }
-      if (allocation !== 'confirmed') {
-        await this.recordDiagnostic('無法確認連號配置', config, { screenshot: true });
-        this.alert('已進入下一步，但無法證明兩張座位連號；為避免誤買已停止自動操作');
-        return { reason: 'blocked' };
-      }
+    if (this.restriction) return { reason: 'blocked' };
+    const evidence = await inspectKhamHandoff(page).catch(() => null);
+    const handoff = evidence ? classifyKhamHandoff(evidence, attempt.ticketCount) : 'unknown';
+    if (handoff === 'adjacent-unavailable') {
+      this.log(`${attempt.product.date} 明確回覆未配置座位，繼續下一順位`);
+      return { reason: 'adjacent-unavailable' };
+    }
+    if (handoff === 'separated') {
+      await this.recordDiagnostic('已配置但非連號', config, { screenshot: true });
+      this.alert('寬宏已顯示兩張非連號座位；為避免保留狀態污染後續嘗試，已停止自動操作');
+      return { reason: 'blocked' };
+    }
+    if (handoff !== 'confirmed') {
+      await this.recordDiagnostic('無法確認交接頁', config, { screenshot: true });
+      this.alert('已按下一步，但無法確認已進入有效的購物車／結帳階段；已停止自動操作');
+      return { reason: 'blocked' };
     }
 
     this.state.phase = 'manual-action';
@@ -404,6 +422,7 @@ export class KhamController {
   async runAttempt(attempt, config) {
     const page = this.page;
     const attemptConfig = { ...config, ticketCount: attempt.ticketCount };
+    let refreshWaited = false;
     for (let offerRank = 0; offerRank < 20 && !this.stopRequested; offerRank += 1) {
       this.state.phase = 'entering-sale';
       this.log(`嘗試 ${attempt.product.label}，${attempt.ticketCount} 張${attempt.adjacencyRequired ? '連號' : ''}`);
@@ -411,10 +430,12 @@ export class KhamController {
         await this.recordDiagnostic('找不到官方購票按鈕', config, { screenshot: true });
         return { reason: 'blocked' };
       }
+      if (this.restriction) return { reason: 'blocked' };
 
       const purchase = await clickBestKhamPurchaseOption(page, attemptConfig, offerRank)
         .catch(() => ({ clicked: false }));
-      if (!purchase.clicked) return { reason: 'unavailable' };
+      if (!purchase.clicked) return { reason: 'unavailable', refreshWaited };
+      if (this.restriction) return { reason: 'blocked' };
       this.state.ticketStatus = `嘗試 ${purchase.option.price} 元／${attempt.ticketCount} 張`;
       this.log(`已依順位點擊「立即訂購」：${purchase.option.text}`);
 
@@ -430,10 +451,12 @@ export class KhamController {
       }
 
       if (!(await this.waitBeforeNextAttempt())) return { reason: 'stopped' };
+      refreshWaited = true;
       this.state.phase = 'refreshing';
       if (await refreshKhamInventory(page).catch(() => false)) {
         this.log('已按寬宏「更新票數」，等待票況穩定');
-        const refreshed = await waitForKhamInventory(page, 15_000).catch(() => null);
+        const refreshed = await waitForKhamInventoryRefresh(page, stage.snapshot, 15_000).catch(() => null);
+        if (this.restriction) return { reason: 'blocked' };
         if (!refreshed || refreshed.loading) {
           this.alert('更新票數後仍無法確認票況，已停止自動操作');
           return { reason: 'blocked' };
@@ -446,9 +469,13 @@ export class KhamController {
           this.alert('更新票數後頁面結構無法辨識，已停止自動操作');
           return { reason: 'blocked' };
         }
+      } else {
+        await this.recordDiagnostic('找不到更新票數按鈕', config, { screenshot: true });
+        this.alert('票況無票但找不到可用的官方「更新票數」按鈕，已停止以避免快速重載');
+        return { reason: 'blocked' };
       }
     }
-    return { reason: this.stopRequested ? 'stopped' : 'unavailable' };
+    return { reason: this.stopRequested ? 'stopped' : 'unavailable', refreshWaited };
   }
 
   async start() {
@@ -483,6 +510,9 @@ export class KhamController {
           }
           if (result.reason === 'stopped') return;
           this.log(`${attempt.product.date}／${attempt.ticketCount} 張目前無符合條件票券，繼續下一順位`);
+          if (result.reason === 'unavailable' && !result.refreshWaited) {
+            if (!(await this.waitBeforeNextAttempt())) return;
+          }
         }
         if (!this.stopRequested) this.log('本輪所有順位皆無票，從 2/28 重新開始');
       }

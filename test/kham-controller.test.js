@@ -15,11 +15,18 @@ test('Kham runtime ticket mode accepts only the two supported choices', () => {
   assert.throws(() => controller.setTicketMode('single'), /執行中/);
 });
 
+test('Kham general sale refuses to retain a card prefix', () => {
+  const controller = new KhamController('/tmp/kham-controller-test');
+  assert.throws(() => controller.setCardPrefix('123456'), /一般販售模式/);
+  assert.equal(controller.cardPrefix, null);
+});
+
 class FlowController extends KhamController {
   constructor(results, ticketMode = 'single') {
     super('/tmp/kham-controller-test');
     this.results = [...results];
     this.attempts = [];
+    this.waits = 0;
     this.ticketMode = ticketMode;
   }
 
@@ -50,7 +57,10 @@ class FlowController extends KhamController {
     return this.results.shift();
   }
 
-  async waitBeforeNextAttempt() {}
+  async waitBeforeNextAttempt() {
+    this.waits += 1;
+    return true;
+  }
 }
 
 test('Kham controller repeats 2/28 and 2/27 until selected', async () => {
@@ -69,6 +79,7 @@ test('Kham controller repeats 2/28 and 2/27 until selected', async () => {
     ['2027-02-28', 1],
     ['2027-02-27', 1],
   ]);
+  assert.equal(controller.waits, 3);
   assert.equal(controller.state.running, false);
 });
 

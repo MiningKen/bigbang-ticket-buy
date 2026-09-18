@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   areKhamSeatsAdjacent,
   classifyKhamAllocation,
+  classifyKhamHandoff,
   classifyKhamPage,
   classifyKhamInventory,
   clickBestKhamPurchaseOption,
@@ -15,6 +16,7 @@ import {
   rankKhamOffers,
   selectKhamQuantity,
   submitKhamCardValidation,
+  waitForKhamInventoryRefresh,
 } from '../src/kham-actions.js';
 import * as khamActions from '../src/kham-actions.js';
 
@@ -76,6 +78,7 @@ test('Kham ranking excludes wheelchair and fan-benefit-only options', () => {
     { text: 'VIP 1 區 $9,430 視線遮蔽', price: 9430, kind: 'select', index: 1 },
     { text: 'VIP 2 區 $9,380', price: 9380, kind: 'select', index: 2 },
     { text: 'VIP 粉絲福利 $20', price: 20, kind: 'select', index: 3 },
+    { text: '我已閱讀並同意購票條款 $9,430', price: 9430, kind: 'input', index: 4 },
   ]);
 
   assert.deepEqual(
@@ -99,6 +102,7 @@ test('Kham ranking uses price when availability quality is otherwise equal', () 
 test('Kham product row price ignores the event year and reads the actual ticket price', () => {
   assert.equal(priceFromKhamText('2027/02/28(日)18:30 高雄國家體育場 8380 立即訂購'), 8380);
   assert.equal(priceFromKhamText('VIP 1 $9,430 立即訂購'), 9430);
+  assert.equal(priceFromKhamText('VIP 2027 / 一般區 8380'), 8380);
 });
 
 test('Kham product list clicks the highest-priced compatible immediate-order row', async () => {
@@ -161,6 +165,22 @@ test('stable inventory is sold out only when every scoped row is unavailable', (
   }).status, 'available');
 });
 
+test('inventory refresh waits for refresh-start evidence before accepting stable rows', async () => {
+  const before = { loading: false, rows: [{ index: 1, text: 'A區 8380 已售完', price: 8380, available: false }] };
+  const snapshots = [
+    { ...before, loading: true },
+    { loading: false, rows: [{ index: 1, text: 'A區 8380 尚有座位', price: 8380, available: true }] },
+  ];
+  const page = {
+    evaluate: async () => snapshots.shift() || before,
+    waitForTimeout: async () => {},
+  };
+
+  const refreshed = await waitForKhamInventoryRefresh(page, before, 100);
+  assert.equal(refreshed.loading, false);
+  assert.equal(refreshed.rows[0].available, true);
+});
+
 test('inventory ranking excludes accessible areas and prefers non-obstructed inventory', () => {
   const ranked = rankKhamAreas([
     { index: 0, text: '輪椅席 9430', price: 9430, available: true },
@@ -182,11 +202,26 @@ test('Kham adjacency requires the same area and row with consecutive seat number
 test('Kham allocation rejects an explicitly non-adjacent pair and recognizes confirmed seats', () => {
   assert.equal(classifyKhamAllocation('無法配置兩張連號座位', 2), 'adjacent-unavailable');
   assert.equal(classifyKhamAllocation('剩餘座位不足，無連續座位', 2), 'adjacent-unavailable');
-  assert.equal(classifyKhamAllocation('系統已成功配置兩張連號座位', 2), 'confirmed');
+  assert.equal(classifyKhamAllocation('系統未配置兩張連號座位', 2), 'adjacent-unavailable');
+  assert.equal(classifyKhamAllocation('購票說明：系統將配置兩張連號座位', 2), 'unknown');
   assert.equal(classifyKhamAllocation('A區 3排 8號、A區 3排 9號', 2), 'confirmed');
-  assert.equal(classifyKhamAllocation('A區 3排 8號、A區 3排 10號', 2), 'adjacent-unavailable');
+  assert.equal(classifyKhamAllocation('如無法連號將顯示提示；A區 3排 8號、A區 3排 9號', 2), 'confirmed');
+  assert.equal(classifyKhamAllocation('A區 3排 8號、A區 3排 10號', 2), 'separated');
   assert.equal(classifyKhamAllocation('A區 3排 8號', 1), 'single-confirmed');
   assert.equal(classifyKhamAllocation('請選擇座位', 2), 'unknown');
+});
+
+test('Kham handoff requires an active checkout stage and rejects dialogs', () => {
+  const checkout = {
+    activeStep: '購物車',
+    headings: ['訂購資料確認'],
+    dialogs: [],
+    seatText: 'A區 3排 8號',
+  };
+  assert.equal(classifyKhamHandoff(checkout, 1), 'confirmed');
+  assert.equal(classifyKhamHandoff({ ...checkout, activeStep: '', headings: [] }, 1), 'unknown');
+  assert.equal(classifyKhamHandoff({ ...checkout, dialogs: [{ text: '系統忙碌' }] }, 1), 'blocked');
+  assert.equal(classifyKhamHandoff({ ...checkout, seatText: 'A區 3排 8號、A區 3排 10號' }, 2), 'separated');
 });
 
 test('Kham quantity selection chooses the exact requested count', async () => {

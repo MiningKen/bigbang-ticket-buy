@@ -1,13 +1,14 @@
 const WHEELCHAIR_PATTERN = /輪椅|身障|無障礙|陪同席/i;
 const OBSTRUCTED_PATTERN = /視線遮蔽|視線不良|遮蔽區|obstructed/i;
 const FAN_BENEFIT_PATTERN = /粉絲福利|fan\s*benefit|vip\s*benefit/i;
+const TERMS_PATTERN = /我已閱讀|同意.{0,12}(?:條款|規定|須知)|購票須知/i;
 const SOLD_OUT_PATTERN = /已售完|銷售一空|目前無票|暫無票券|票券已售罄|sold\s*out/i;
 const CHALLENGE_PATTERN = /驗證碼|captcha|我不是機器人|正在排隊|排隊中|等候進入|waiting\s*room|you\s+are\s+(?:now\s+)?in\s+line/i;
 const CARD_VALIDATION_PATTERN = /(?:信用)?卡號前\s*(?:6|六)\s*碼|信用卡前\s*(?:6|六)\s*碼|輸入.*卡號/i;
 const PURCHASE_LABEL_PATTERN = /^立即訂購$/;
 const REAL_NAME_NOTICE_PATTERN = /本節目採[「\s]*個人實名制入場/;
-const ADJACENT_UNAVAILABLE_PATTERN = /(?:無法|不能|未能|沒有|不足|無).{0,12}(?:連號|相鄰|連續座位)|(?:連號|相鄰|連續座位).{0,12}(?:無法|不足|沒有)/i;
-const ADJACENT_CONFIRMED_PATTERN = /(?:成功|已|系統).{0,16}(?:配置|分配|取得).{0,8}(?:兩張)?(?:連號|相鄰)(?:座位)?/i;
+const ADJACENT_UNAVAILABLE_PATTERN = /(?:無法|不能|未能|未配置|沒有|不足|無|非).{0,12}(?:連號|相鄰|連續座位)|(?:連號|相鄰|連續座位).{0,12}(?:無法|不足|沒有|未配置)/i;
+const HANDOFF_PATTERN = /購物車|結帳|訂購資料|訂購確認|實名資料|持票人|付款方式|訂單/i;
 
 function parseKhamSeatLabels(value) {
   const text = Array.isArray(value) ? value.join('、') : String(value || '');
@@ -33,18 +34,27 @@ export function classifyKhamAllocation(text, requestedCount) {
     return parseKhamSeatLabels(normalized).length >= 1 ? 'single-confirmed' : 'unknown';
   }
   if (requestedCount !== 2) return 'unknown';
-  if (ADJACENT_UNAVAILABLE_PATTERN.test(normalized)) return 'adjacent-unavailable';
-  if (ADJACENT_CONFIRMED_PATTERN.test(normalized)) return 'confirmed';
   const seats = parseKhamSeatLabels(normalized);
-  if (seats.length < 2) return 'unknown';
-  return areKhamSeatsAdjacent(seats.map((seat) => `${seat.area} ${seat.row}排 ${seat.seat}號`))
-    ? 'confirmed'
-    : 'adjacent-unavailable';
+  if (seats.length >= 2) {
+    return areKhamSeatsAdjacent(seats.map((seat) => `${seat.area} ${seat.row}排 ${seat.seat}號`))
+      ? 'confirmed'
+      : 'separated';
+  }
+  return ADJACENT_UNAVAILABLE_PATTERN.test(normalized) ? 'adjacent-unavailable' : 'unknown';
+}
+
+export function classifyKhamHandoff(evidence, requestedCount) {
+  if ((evidence.dialogs || []).length) return 'blocked';
+  const activeStage = `${evidence.activeStep || ''} ${(evidence.headings || []).join(' ')}`;
+  if (!HANDOFF_PATTERN.test(activeStage)) return 'unknown';
+  if (requestedCount === 1) return 'confirmed';
+  if (requestedCount !== 2) return 'unknown';
+  return classifyKhamAllocation(evidence.seatText, 2);
 }
 
 export function priceFromKhamText(text) {
   const explicit = String(text || '').match(/(?:NT\.?\s*)?[$＄]\s*([\d,]+)/i)
-    || String(text || '').match(/(?:票價|全票|vip)\D{0,12}([\d,]{4,})/i);
+    || String(text || '').match(/(?:票價|全票)\D{0,12}([\d,]{4,})/i);
   if (explicit) return Number.parseInt(explicit[1].replaceAll(',', ''), 10);
 
   const candidates = [...String(text || '').matchAll(/(?:^|\D)([\d,]{4,5})(?=\D|$)/g)]
@@ -81,6 +91,7 @@ export function rankKhamOffers(offers, { preferNonObstructed = true, allowObstru
     .filter((offer) => offer.enabled !== false)
     .filter((offer) => !WHEELCHAIR_PATTERN.test(offer.text || ''))
     .filter((offer) => !FAN_BENEFIT_PATTERN.test(offer.text || ''))
+    .filter((offer) => !TERMS_PATTERN.test(offer.text || ''))
     .filter((offer) => allowObstructedFallback || !OBSTRUCTED_PATTERN.test(offer.text || ''))
     .sort((left, right) => {
       if (preferNonObstructed) {
@@ -118,7 +129,7 @@ export async function inspectKhamInventory(page) {
     const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
     const priceFrom = (text) => {
       const explicit = text.match(/(?:NT\.?\s*)?[$＄]\s*([\d,]+)/i)
-        || text.match(/(?:票價|全票|vip)\D{0,12}([\d,]{4,})/i);
+        || text.match(/(?:票價|全票)\D{0,12}([\d,]{4,})/i);
       if (explicit) return Number.parseInt(explicit[1].replaceAll(',', ''), 10);
       const values = [...text.matchAll(/(?:^|\D)([\d,]{4,5})(?=\D|$)/g)]
         .map((match) => Number.parseInt(match[1].replaceAll(',', ''), 10))
@@ -135,13 +146,21 @@ export async function inspectKhamInventory(page) {
       '.glyphicon-refresh-animate',
       '[aria-busy="true"]',
     ].join(',');
-    const loading = [...document.querySelectorAll(loadingSelectors)].some(isVisible);
+    const refreshControls = [...document.querySelectorAll('button, a, input[type="button"], input[type="submit"]')]
+      .filter((element) => /更新票數/.test(clean(element.innerText || element.value || element.textContent)));
+    const refreshBusy = refreshControls.some((element) => isVisible(element) && (
+      element.disabled
+      || element.getAttribute('aria-busy') === 'true'
+      || /loading|disabled|busy/i.test(element.className || '')
+    ));
+    const loading = refreshBusy || [...document.querySelectorAll(loadingSelectors)].some(isVisible);
     const allRows = [...document.querySelectorAll('tr')];
     const rows = allRows.flatMap((row, domIndex) => {
       if (!isVisible(row)) return [];
       const text = clean(row.innerText || row.textContent);
       const price = priceFrom(text);
       if (!price) return [];
+      if (!/(?:區|席|座位)/.test(text) || /立即訂購/.test(text)) return [];
       const soldOut = /已售完|銷售一空|目前無票|票券已售罄|sold\s*out/i.test(text);
       const controls = [...row.querySelectorAll('a, button, select, input, [onclick]')]
         .filter((element) => isVisible(element) && !element.disabled);
@@ -165,6 +184,24 @@ export async function waitForKhamInventory(page, timeoutMs = 15_000) {
     snapshot = await inspectKhamInventory(page);
   }
   return snapshot;
+}
+
+function khamInventorySignature(snapshot) {
+  return JSON.stringify((snapshot.rows || []).map((row) => [row.text, row.price, row.available]));
+}
+
+export async function waitForKhamInventoryRefresh(page, previousSnapshot, timeoutMs = 15_000) {
+  const deadline = Date.now() + timeoutMs;
+  const previousSignature = khamInventorySignature(previousSnapshot);
+  let refreshStarted = false;
+  while (Date.now() < deadline) {
+    const snapshot = await inspectKhamInventory(page);
+    const changed = khamInventorySignature(snapshot) !== previousSignature;
+    if (snapshot.loading || changed) refreshStarted = true;
+    if (refreshStarted && !snapshot.loading) return snapshot;
+    await page.waitForTimeout(100);
+  }
+  return null;
 }
 
 export async function refreshKhamInventory(page) {
@@ -276,6 +313,39 @@ export async function inspectKhamPage(page) {
     title: await page.title().catch(() => ''),
     ...structure,
   };
+}
+
+export async function inspectKhamHandoff(page) {
+  const structure = await page.evaluate(() => {
+    const visible = (element) => {
+      const style = window.getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return style.display !== 'none'
+        && style.visibility !== 'hidden'
+        && Number.parseFloat(style.opacity || '1') > 0
+        && rect.width > 0
+        && rect.height > 0;
+    };
+    const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+    const dialogs = [...document.querySelectorAll('[role="dialog"], .ui-dialog, .modal, .swal2-popup, .bootbox, [class*="popup"], [id*="popup"]')]
+      .filter(visible)
+      .map((element) => ({ text: clean(element.innerText || element.textContent) }))
+      .filter((dialog) => dialog.text);
+    const activeStep = [...document.querySelectorAll('.active, .current, [aria-current="step"]')]
+      .filter(visible)
+      .map((element) => clean(element.innerText || element.textContent))
+      .find((text) => text) || '';
+    const headings = [...document.querySelectorAll('h1, h2, h3, .page-title, .section-title')]
+      .filter(visible)
+      .map((element) => clean(element.innerText || element.textContent))
+      .filter(Boolean)
+      .slice(0, 20);
+    const seatContainers = [...document.querySelectorAll('.cart, .shopping-cart, .order, .checkout, .seat-info, .ticket-info, [class*="cart"], [id*="cart"]')]
+      .filter(visible);
+    const seatText = clean(seatContainers.map((element) => element.innerText || element.textContent).join(' '));
+    return { dialogs, activeStep, headings, seatText };
+  });
+  return { url: page.url(), ...structure };
 }
 
 export async function dismissKhamRealNameNotice(page) {
@@ -407,7 +477,7 @@ export async function scanKhamOffers(page, ticketCount) {
       return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
     };
     const priceFrom = (text) => {
-      const match = text.match(/(?:NT\.?\s*)?[$＄]\s*([\d,]+)/i) || text.match(/(?:票價|全票|vip)\D{0,12}([\d,]{4,})/i);
+      const match = text.match(/(?:NT\.?\s*)?[$＄]\s*([\d,]+)/i) || text.match(/(?:票價|全票)\D{0,12}([\d,]{4,})/i);
       return match ? Number.parseInt(match[1].replaceAll(',', ''), 10) : 0;
     };
     const surroundingText = (element) => {
@@ -477,6 +547,26 @@ export async function selectKhamVipBenefit(page) {
     input.click();
     return true;
   }, FAN_BENEFIT_PATTERN.source);
+}
+
+export async function acceptKhamTerms(page) {
+  return page.evaluate((patternSource) => {
+    const pattern = new RegExp(patternSource, 'i');
+    const visible = (element) => {
+      const style = window.getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+    };
+    const checkbox = [...document.querySelectorAll('input[type="checkbox"]')].find((element) => {
+      if (!visible(element) || element.disabled) return false;
+      const label = element.id ? document.querySelector(`label[for="${CSS.escape(element.id)}"]`) : null;
+      const container = element.closest('label, tr, li, .option, .terms, div');
+      return pattern.test(`${label?.innerText || ''} ${container?.innerText || ''}`);
+    });
+    if (!checkbox) return 'not-present';
+    if (!checkbox.checked) checkbox.click();
+    return checkbox.checked ? 'accepted' : 'failed';
+  }, TERMS_PATTERN.source);
 }
 
 export async function clickKhamNext(page) {
